@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 
 namespace MinimalMachineLearning
@@ -11,9 +10,9 @@ namespace MinimalMachineLearning
         const int GLYPH_WIDTH = 28;
         const int GLYPH_HEIGHT = 28;
         const int FEATURES = GLYPH_WIDTH * GLYPH_HEIGHT;
-        const int FEATURES_BIAS = FEATURES + 1;
-        const int HIDDEN_UNITS= 25;
-        const int HIDDEN_UNITS_BIAS = HIDDEN_UNITS + 1;
+        const int FEATURES_AND_BIAS = FEATURES + 1;
+        const int HIDDEN = 32;
+        const int HIDDEN_AND_BIAS = HIDDEN + 1;
         const int DIGITS = 10;
         const int FIRST_TRAINING_GLYPH = 0;
         const int LAST_TRAINING_GLYPH = 799;
@@ -26,16 +25,12 @@ namespace MinimalMachineLearning
 
         static List<byte[]> _data = new List<byte[]>(DIGITS);
 
-        static double[] _features = new double[FEATURES_BIAS];
-        static double[] _hidden = new double[HIDDEN_UNITS_BIAS];
+        static double[] _features = new double[FEATURES_AND_BIAS];
+        static double[] _hidden = new double[HIDDEN_AND_BIAS];
         static double[] _output = new double[DIGITS];
-        static double[] _label = new double[DIGITS];
 
-        static double[,] _theta1 = new double[HIDDEN_UNITS, FEATURES_BIAS];
-        static double[,] _theta2 = new double[DIGITS, HIDDEN_UNITS_BIAS];
-
-        static double[,] _theta1_grad = new double[HIDDEN_UNITS, FEATURES_BIAS];
-        static double[,] _theta2_grad = new double[DIGITS, HIDDEN_UNITS_BIAS];
+        static double[,] _theta1 = new double[HIDDEN, FEATURES_AND_BIAS];
+        static double[,] _theta2 = new double[DIGITS, HIDDEN_AND_BIAS];
 
         static void Main(string[] args)
         {
@@ -64,8 +59,7 @@ namespace MinimalMachineLearning
             int iterations = 0;
             while (true)
             {
-                EvaluateGradients(FIRST_TRAINING_GLYPH, LAST_TRAINING_GLYPH);
-                GradientDescent(_learningRate);
+                GradientDescent(FIRST_TRAINING_GLYPH, LAST_TRAINING_GLYPH, _learningRate);
                 Console.Write('.');
                 if (++iterations > 0 && iterations % 10 == 0)
                 {
@@ -109,12 +103,12 @@ namespace MinimalMachineLearning
             //seed RNG for reproducability
             Random rnd = new Random(_randomSeed);
 
-            for (int x = 0; x < HIDDEN_UNITS; x++)
-                for (int y = 0; y < FEATURES_BIAS; y++)
+            for (int x = 0; x < HIDDEN; x++)
+                for (int y = 0; y < FEATURES_AND_BIAS; y++)
                     _theta1[x, y] = rnd.NextDouble() * 2 * epsilon - epsilon;
 
             for (int x = 0; x < DIGITS; x++)
-                for (int y = 0; y < HIDDEN_UNITS_BIAS; y++)
+                for (int y = 0; y < HIDDEN_AND_BIAS; y++)
                     _theta2[x, y] = rnd.NextDouble() * 2 * epsilon - epsilon;
         }
         
@@ -136,10 +130,10 @@ namespace MinimalMachineLearning
 
             //Calculate Hidden Layer from _features & _theta1!
             _hidden[0] = 1;//BIAS
-            for (int i = 0; i < HIDDEN_UNITS; i++)
+            for (int i = 0; i < HIDDEN; i++)
             {
                 double value = 0.0f;
-                for (int j = 0; j < FEATURES_BIAS; j++)
+                for (int j = 0; j < FEATURES_AND_BIAS; j++)
                     value += _features[j] * _theta1[i, j]; //This is where most CPU cycles are spent when making a prediction
                 _hidden[i + 1] = Sigmoid(value);
             }
@@ -148,32 +142,25 @@ namespace MinimalMachineLearning
             for (int i = 0; i < DIGITS; i++)
             {
                 double value = 0.0f;
-                for (int j = 0; j < HIDDEN_UNITS_BIAS; j++)
+                for (int j = 0; j < HIDDEN_AND_BIAS; j++)
                     value += _hidden[j] * _theta2[i, j];
                 _output[i] = Sigmoid(value);
-                Debug.Assert(_output[i] > 0 && _output[i] < 1);
             }
         }
-        
-        private static void EvaluateGradients(int from, int to)
-        {
-            //reset the arrays used to store the gradient. (this is where the function stores it's result, yeah side-fx are bad I know :P)
-            for (int x = 0; x < HIDDEN_UNITS; x++)
-                for (int y = 0; y < FEATURES_BIAS; y++)
-                    _theta1_grad[x, y] = 0;
 
-            for (int x = 0; x < DIGITS; x++)
-                for (int y = 0; y < HIDDEN_UNITS_BIAS; y++)
-                    _theta2_grad[x, y] = 0;
-            
+
+        private static void GradientDescent(int from, int to, double learningRate)
+        {
             //some temporary arrays
-            double[] delta3 = new double[DIGITS];
-            double[] delta2 = new double[HIDDEN_UNITS];
-            double[] target = new double[DIGITS];
+            double[,] theta1_grad = new double[HIDDEN, FEATURES_AND_BIAS];
+            double[,] theta2_grad = new double[DIGITS, HIDDEN_AND_BIAS];
+            double[] output_error = new double[DIGITS];
+            double[] hidden_error = new double[HIDDEN];
+            double[] target_output = new double[DIGITS];
             int m = 0;
             for (int i = 0; i < DIGITS; i++) //foreach digits
             {
-                target[i] = 1;
+                target_output[i] = 1;
                 for (int j = from; j < to + 1; j++) //foreach example in the training set
                 {
                     m++; //count number of examples
@@ -181,63 +168,62 @@ namespace MinimalMachineLearning
 
                     //How much does the prediction differ from the correct answer?
                     for (int x = 0; x < DIGITS; x++)
-                        delta3[x] = _output[x] - target[x];
+                        output_error[x] = _output[x] - target_output[x];
 
-                    //Use backpropagation to find out how the hidden unit should have been activated to lead to the correct answer and store the delta.
-                    for (int y = 1; y < HIDDEN_UNITS_BIAS; y++)
+                    //Use backpropagation to find out how much the hidden units activation differs from the ideal activation.
+                    for (int y = 1; y < HIDDEN_AND_BIAS; y++)
                     {
                         double temp = 0;
                         for (int x = 0; x < DIGITS; x++)
-                            temp += delta3[x] * _theta2[x, y];
-                        delta2[y - 1] = temp * _hidden[y] * (1 - _hidden[y]);
+                            temp += output_error[x] * _theta2[x, y];
+                        hidden_error[y - 1] = temp * _hidden[y] * (1 - _hidden[y]);
                     }
 
                     //Form the sum of the found delta2 weighted by the activation in the input layer.
                     //This can be used to compute a gradient to minimize the cost function by changing the hidden layer along the gradient.
                     //Eg "moving down the slope of the cost function"
-                    for (int x = 0; x < HIDDEN_UNITS; x++)
-                        for (int y = 0; y < FEATURES_BIAS; y++)
-                            _theta1_grad[x, y] += delta2[x] * _features[y]; //while training ~30% of the CPU cycles are spend here!
+                    for (int x = 0; x < HIDDEN; x++)
+                        for (int y = 0; y < FEATURES_AND_BIAS; y++)
+                            theta1_grad[x, y] += hidden_error[x] * _features[y]; //while training ~30% of the CPU cycles are spend here!
 
                     //Do the same thing for delta3
                     for (int x = 0; x < DIGITS; x++)
-                        for (int y = 0; y < HIDDEN_UNITS_BIAS; y++)
-                            _theta2_grad[x, y] += delta3[x] * _hidden[y];
+                        for (int y = 0; y < HIDDEN_AND_BIAS; y++)
+                            theta2_grad[x, y] += output_error[x] * _hidden[y];
                 }
-                target[i] = 0;
+                target_output[i] = 0;
             }
 
             //form the mean based on the weighted sum - this results in theta1's gradient
             double invM = 1.0f / m;
-            for (int x = 0; x < HIDDEN_UNITS; x++)
-                for (int y = 0; y < FEATURES_BIAS; y++)
-                    _theta1_grad[x, y] *= invM;
+            for (int x = 0; x < HIDDEN; x++)
+                for (int y = 0; y < FEATURES_AND_BIAS; y++)
+                    theta1_grad[x, y] *= invM;
 
             //Do the same thing for theta2
             for (int x = 0; x < DIGITS; x++)
-                for (int y = 0; y < HIDDEN_UNITS_BIAS; y++)
-                    _theta2_grad[x, y] *= invM;
+                for (int y = 0; y < HIDDEN_AND_BIAS; y++)
+                    theta2_grad[x, y] *= invM;
 
             //regularize e.g. penelize high values in theta1 excluding the bias term
-            for (int x = 0; x < HIDDEN_UNITS; x++)
-                for (int y = 1; y < FEATURES_BIAS; y++)
-                    _theta1_grad[x, y] += _regularization * invM * _theta1[x, y];
+            for (int x = 0; x < HIDDEN; x++)
+                for (int y = 1; y < FEATURES_AND_BIAS; y++)
+                    theta1_grad[x, y] += _regularization * invM * _theta1[x, y];
 
             //regularize e.g. penelize high values in theta2 excluding the bias term
             for (int x = 0; x < DIGITS; x++)
-                for (int y = 1; y < HIDDEN_UNITS_BIAS; y++)
-                    _theta2_grad[x, y] += _regularization * invM * _theta2[x, y];
-        }
-        
-        private static void GradientDescent(double learningRate)
-        {
-            for (int x = 0; x < HIDDEN_UNITS; x++)
-                for (int y = 0; y < FEATURES_BIAS; y++)
-                    _theta1[x, y] -= _theta1_grad[x, y] * learningRate;
+                for (int y = 1; y < HIDDEN_AND_BIAS; y++)
+                    theta2_grad[x, y] += _regularization * invM * _theta2[x, y];
 
+            //step down the slope/gradient to minimize theta1
+            for (int x = 0; x < HIDDEN; x++)
+                for (int y = 0; y < FEATURES_AND_BIAS; y++)
+                    _theta1[x, y] -= theta1_grad[x, y] * learningRate;
+
+            //step down the slope/gradient to minimize theta2
             for (int x = 0; x < DIGITS; x++)
-                for (int y = 0; y < HIDDEN_UNITS_BIAS; y++)
-                    _theta2[x, y] -= _theta2_grad[x, y] * learningRate;
+                for (int y = 0; y < HIDDEN_AND_BIAS; y++)
+                    _theta2[x, y] -= theta2_grad[x, y] * learningRate;
         }
 
         private static double Sigmoid(double value)
@@ -255,11 +241,7 @@ namespace MinimalMachineLearning
                 {
                     Predict(i, j);
                     for (int k = 0; k < DIGITS; k++)
-                    {
-                        double p = _output[k];
                         delta -= (i == k) ? Math.Log(_output[k]) : Math.Log(1 - _output[k]); //delta will always grow or stay equal
-                    }
-                    Debug.Assert(!double.IsInfinity(delta));
                     m++;
                 }
             }
@@ -271,10 +253,10 @@ namespace MinimalMachineLearning
         {
             double squareSum = 0;
             for (int y = 1; y < FEATURES; y++) //skip the bias terms
-                for (int x = 0; x < HIDDEN_UNITS; x++)
+                for (int x = 0; x < HIDDEN; x++)
                     squareSum += _theta1[x, y] * _theta1[x, y];
             
-            for (int y = 1; y < HIDDEN_UNITS; y++) //skip the bias terms
+            for (int y = 1; y < HIDDEN; y++) //skip the bias terms
                 for (int x = 0; x < DIGITS; x++)
                     squareSum += _theta2[x, y] * _theta2[x, y];
 
